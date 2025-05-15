@@ -2,10 +2,9 @@ package main
 
 import (
 	"HKN/ai-notification/conf"
-	"HKN/ai-notification/pkg/notification"
-	rediss "HKN/ai-notification/pkg/redis"
 	"HKN/ai-notification/pkg/utils/logger"
 	"context"
+	"encoding/json"
 	firebase "firebase.google.com/go"
 	"fmt"
 	"github.com/redis/go-redis/v9"
@@ -15,12 +14,20 @@ import (
 	gormLogger "gorm.io/gorm/logger"
 	"gorm.io/gorm/schema"
 	"log"
-	"os"
-	"os/signal"
-	"sync"
-	"syscall"
 	"time"
 )
+
+type AlertData struct {
+	ID         string  `json:"id"`
+	DriverID   string  `json:"driver_id"`
+	Confidence float64 `json:"confidence"`
+	Location   string  `json:"location"`
+	Status     string  `json:"status"`
+}
+
+var driverStatus = make(map[string]string)
+var cancelFuncs = make(map[string]context.CancelFunc)
+var lastSentTime = make(map[string]time.Time)
 
 func main() {
 	conf.LoadConfig()
@@ -32,74 +39,96 @@ func main() {
 	client := initRedis()
 	_ = initFirebase()
 
-	streamHandler, err := rediss.NewStreamHandler(client, "sleeping-alerts", "notification-group")
-	if err != nil {
-		logger.DefaultLogger.Fatalf("Failed to initialize Redis Stream handler: %v", err)
+	go consumeRedisStream(client)
+
+	select {}
+}
+
+func consumeRedisStream(redisClient *redis.Client) {
+	lastID := "$"
+	ctx := context.Background()
+	for {
+		streams, err := redisClient.XRead(ctx, &redis.XReadArgs{
+			Streams: []string{"sleeping-alerts", lastID},
+			Block:   0,
+		}).Result()
+		if err != nil {
+			log.Printf("Redis read error: %v\n", err)
+			continue
+		}
+
+		for _, stream := range streams {
+			for _, message := range stream.Messages {
+				lastID = message.ID
+
+				rawData := message.Values["data"].(string)
+				var alert AlertData
+				if err := json.Unmarshal([]byte(rawData), &alert); err != nil {
+					log.Printf("JSON parse error: %v\n", err)
+					continue
+				}
+
+				handleAlert(alert)
+			}
+		}
+	}
+}
+
+func handleAlert(alert AlertData) {
+	driverID := alert.DriverID
+	status := alert.Status
+
+	if driverStatus[driverID] == status {
+		return
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	driverStatus[driverID] = status
 
-	alertChan := make(chan rediss.SleepingAlert, 100)
+	if status == "sleeping" {
+		sendNotification(alert)
 
-	go streamHandler.StartConsuming(ctx, alertChan)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancelFuncs[driverID] = cancel
 
-	alertingMap := make(map[string]chan bool)
-	var alertingMapMu sync.Mutex
+		go sendNotificationEvery5s(ctx, alert)
 
-	go func() {
-		for alert := range alertChan {
-			payload := notification.NotificationPayload{
-				Title:    "Sleeping Alert",
-				Message:  fmt.Sprintf("Detected sleeping at %s with confidence %.2f", alert.Location, alert.Confidence),
-				DriverID: alert.DriverID,
-				Data: map[string]interface{}{
-					"confidence": alert.Confidence,
-					"location":   alert.Location,
-				},
-			}
-
-			alertingMapMu.Lock()
-			if alert.Confidence >= 0.8 {
-				if _, exists := alertingMap[alert.DriverID]; !exists {
-					stopChan := make(chan bool)
-					alertingMap[alert.DriverID] = stopChan
-
-					go func(userID string, stop <-chan bool, payload notification.NotificationPayload) {
-						ticker := time.NewTicker(5 * time.Second)
-						defer ticker.Stop()
-
-						logger.DefaultLogger.Infof("Start alerting for user: %s", userID)
-
-						for {
-							select {
-							case <-ticker.C:
-								// TODO send noti
-								log.Println("Receive alert")
-							case <-stop:
-								logger.DefaultLogger.Infof("Stopped alerting for user: %s", userID)
-								return
-							}
-						}
-					}(alert.DriverID, stopChan, payload)
-				}
-			} else {
-				if stopChan, exists := alertingMap[alert.DriverID]; exists {
-					stopChan <- true
-					delete(alertingMap, alert.DriverID)
-				}
-			}
-			alertingMapMu.Unlock()
+	} else if status == "normal" {
+		if cancel, ok := cancelFuncs[driverID]; ok {
+			cancel()
+			delete(cancelFuncs, driverID)
+			log.Printf("Driver %s recoverd (status: normal)\n", driverID)
 		}
-	}()
+	}
+}
 
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-	<-sigChan
+func sendNotificationEvery5s(ctx context.Context, alert AlertData) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
 
-	logger.DefaultLogger.Info("Shutting down service...")
-	cancel()
-	time.Sleep(time.Second)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			sendNotification(alert)
+		}
+	}
+}
+
+func sendNotification(alert AlertData) {
+	driverID := alert.DriverID
+	now := time.Now()
+
+	if last, ok := lastSentTime[driverID]; ok {
+		if now.Sub(last) < 5*time.Second {
+			log.Printf("Skip noti for %s (less than 5s since last)\n", driverID)
+			return
+		}
+	}
+
+	lastSentTime[driverID] = now
+	// TODO send notification
+	log.Printf("ALERT SLEEPING: DriverID=%s, Location=%s\n", alert.DriverID, alert.Location)
 }
 
 func initPostgres() *gorm.DB {

@@ -15,8 +15,10 @@ type AppConfig struct {
 	Port    string `env:"PORT" envDefault:"8001"`
 
 	// Redis Config
-	RedisHost string `env:"REDIS_HOST" envDefault:"localhost"`
-	RedisPort string `env:"REDIS_PORT" envDefault:"6379"`
+	RedisHost     string `env:"REDIS_HOST" envDefault:"localhost"`
+	RedisPort     string `env:"REDIS_PORT" envDefault:"6379"`
+	RedisPassword string `env:"REDIS_PASSWORD" envDefault:"your_password"`
+	RedisDB       int    `env:"REDIS_DB" envDefault:"0"`
 
 	// Notification Config
 	NotificationEndpoint string `env:"NOTIFICATION_ENDPOINT" envDefault:"http://localhost:8000/api/notifications"`

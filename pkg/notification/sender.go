@@ -11,11 +11,10 @@ import (
 )
 
 type NotificationPayload struct {
-	Title     string                 `json:"title"`
-	Message   string                 `json:"message"`
-	UserID    string                 `json:"user_id"`
-	Timestamp time.Time              `json:"timestamp"`
-	Data      map[string]interface{} `json:"data"`
+	Title    string                 `json:"title"`
+	Message  string                 `json:"message"`
+	DriverID string                 `json:"user_id"`
+	Data     map[string]interface{} `json:"data"`
 }
 
 type NotificationSender struct {
@@ -55,6 +54,6 @@ func (s *NotificationSender) SendNotification(payload NotificationPayload) error
 		return fmt.Errorf("notification service returned non-200 status code: %d", resp.StatusCode)
 	}
 
-	logger.DefaultLogger.Infof("Successfully sent notification to user %s", payload.UserID)
+	logger.DefaultLogger.Infof("Successfully sent notification to driver %s", payload.DriverID)
 	return nil
 }

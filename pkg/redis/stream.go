@@ -12,11 +12,10 @@ import (
 )
 
 type SleepingAlert struct {
-	ID         string    `json:"id"`
-	Timestamp  time.Time `json:"timestamp"`
-	UserID     string    `json:"user_id"`
-	Confidence float64   `json:"confidence"`
-	Location   string    `json:"location"`
+	ID         string  `json:"id"`
+	DriverID   string  `json:"driver_id"`
+	Confidence float64 `json:"confidence"`
+	Location   string  `json:"location"`
 }
 
 type StreamHandler struct {
@@ -25,20 +24,13 @@ type StreamHandler struct {
 	groupName string
 }
 
-func NewStreamHandler(redisURL, streamKey, groupName string) (*StreamHandler, error) {
-	opt, err := redis.ParseURL(redisURL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse Redis URL: %v", err)
-	}
-
-	client := redis.NewClient(opt)
-
+func NewStreamHandler(client *redis.Client, streamKey, groupName string) (*StreamHandler, error) {
 	ctx := context.Background()
 	if err := client.Ping(ctx).Err(); err != nil {
 		return nil, fmt.Errorf("failed to connect to Redis: %v", err)
 	}
 
-	err = client.XGroupCreate(ctx, streamKey, groupName, "0").Err()
+	err := client.XGroupCreateMkStream(ctx, streamKey, groupName, "0").Err()
 	if err != nil && err.Error() != "BUSYGROUP Consumer Group name already exists" {
 		return nil, fmt.Errorf("failed to create consumer group: %v", err)
 	}
@@ -77,7 +69,7 @@ func (h *StreamHandler) StartConsuming(ctx context.Context, alertChan chan<- Sle
 						logger.DefaultLogger.Errorf("Error unmarshaling alert: %v", err)
 						continue
 					}
-			
+
 					alertChan <- alert
 
 					if err := h.client.XAck(ctx, h.streamKey, h.groupName, message.ID).Err(); err != nil {

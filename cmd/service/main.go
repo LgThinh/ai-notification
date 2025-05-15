@@ -168,7 +168,7 @@ func sendNotification(db *gorm.DB, alert AlertData, fcm *firebase.App) {
 		},
 	}
 
-	err = sendFCMMessage(fcMessage, fcm)
+	err = sendFCMMessage(fcMessage, fcm, title)
 	if err != nil {
 		log.Println(err, "Error when sending fcm message")
 	}
@@ -240,7 +240,7 @@ func initFirebase() *firebase.App {
 	return app
 }
 
-func sendFCMMessage(message FCMMessage, fcm *firebase.App) error {
+func sendFCMMessage(message FCMMessage, fcm *firebase.App, title string) error {
 	ctx := context.Background()
 
 	// Obtain a messaging client from the Firebase app
@@ -259,20 +259,20 @@ func sendFCMMessage(message FCMMessage, fcm *firebase.App) error {
 	}
 
 	// Send the message
-	response, err := client.Send(ctx, messageSend)
+	_, err = client.Send(ctx, messageSend)
 	if err != nil {
 		log.Println(err, "error sending message.")
 		return err
 	}
 
 	// Log the response from the FCM service
-	log.Printf("Successfully sent message: %s\n", response)
+	log.Printf("Successfully sent message: %s\n", title)
 	return nil
 }
 
-func getDeviceToken(db *gorm.DB, userID int) (*string, error) {
+func getDeviceToken(db *gorm.DB, driverID int) (*string, error) {
 	var token UserDeviceFcmToken
-	err := db.Table("user_device_fcm_token").Where("user_id = ? AND user_role = ?", userID, "driver").First(&token).Error
+	err := db.Table("user_device_fcm_token").Where("user_id = ? AND user_role = ?", driverID, "admin").First(&token).Error
 	if err != nil {
 		log.Println(err, "Device token not found.")
 		if errors.Is(err, gorm.ErrRecordNotFound) {
